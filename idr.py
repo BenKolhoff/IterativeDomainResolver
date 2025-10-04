@@ -14,13 +14,14 @@ DNS_PORT = 53
 
 cache = []
 
+'''
+Returns the corresponding IPv4 of the given domain.
+'''
 def name_resolver(udp_socket, domain_name: str, original_name=""):
 	domain_substrs = get_domain_substrings(domain_name) # List of substrings of the original domain, separated by .
-	#print(f"DOMAIN SUBSTR: {domain_substrs}")
 	dns_response = []
 	current_domain_substr_index: int = 0
 	has_answer: bool = False
-	#print(f"CACHE: {cache}")
 
 	# Check if domain (or part of the domain) is already in the cache
 	if is_in_cache(domain_name):
@@ -31,7 +32,6 @@ def name_resolver(udp_socket, domain_name: str, original_name=""):
 		
 		# Check if the parts of the domain might be in the cache
 		for server in cache:
-			#print(f"Check cache condition: {list(server.values())[0][1]} //  {domain_substrs[1]}")
 			if len(domain_substrs) > 1 and list(server.values())[0][1] == domain_substrs[1]:
 				print(f"Consulting server {list(server.keys())[0]} (cached) to get {domain_substrs[1]}")
 				dns_response = [list(server.values())[0][0]]
@@ -49,7 +49,6 @@ def name_resolver(udp_socket, domain_name: str, original_name=""):
 
 	while not has_answer:
 		record_type = "A" if current_domain_substr_index == len(domain_substrs) - 1 else "NS"
-		#print("########### RECORD TYPE: " + record_type + f" DOMAIN SUBSTRING INDEX: {current_domain_substr_index} ###############")
 	
 		if current_domain_substr_index == 0:
 			try:
@@ -59,10 +58,6 @@ def name_resolver(udp_socket, domain_name: str, original_name=""):
 				print(f"Error contacting server - {e}")
 				return
 
-			# print("--------------------------- DNS RESPONSE -------------------")
-			# print(dns_response)
-			# print("------------------------------------------------------------")
-
 			if type(dns_response) != list or current_domain_substr_index + 1 == len(domain_substrs):
 				print("Error: unable to find answer")
 				return dns_response
@@ -70,40 +65,45 @@ def name_resolver(udp_socket, domain_name: str, original_name=""):
 				current_domain_substr_index += 1
 		else:
 			temp_dns_response = None
-			# if current_domain_substr_index + 1 < len(domain_substrs):
-			# 	current_domain_substr_index += 1
-			
-			#print("/////////// ASKED SERVER: " + dns_response[0] + " /////////////////")
-			print(f"Consulting server {dns_response[0]} (uncached)")
 
-			try:
-				temp_dns_response = get_dns_record(udp_socket, domain_substrs[current_domain_substr_index], dns_response[0], record_type)
-			except TimeoutError:
-				pass
-				#print(f"################################\nBREAKING TO NEW SERVER\nServer just asked: {dns_response[0]}\n####################################")
-			except QueryFailedError as e:
-				print(f"Error contacting server - {e}")
+			for i in range(len(dns_response)):
+				print(f"Consulting server {dns_response[i][:-1] if dns_response[0][-1] == "." else dns_response[i]} (uncached)")
+
+				# Loop through servers until one doesn't time out
+				try:
+					temp_dns_response = get_dns_record(udp_socket, domain_substrs[current_domain_substr_index], dns_response[i], record_type)
+					break
+				except TimeoutError:
+					print(f"Server {dns_response[i][:-1] if dns_response[0][-1] == "." else dns_response[i]} timed out, moving to new server")
+					break
+				except QueryFailedError as e:
+					print(f"Error contacting server - {e}")
+					return
+			else:
+				print("Received no response from contacted servers")
 				return
-			
-			#print("TEMP DNS REPONSE: " + str(temp_dns_response))
-			#print(f"TYPE OF TEMP DNS RESPONSE: {type(temp_dns_response)}")
 
 			if type(temp_dns_response) != list:
-				if type(temp_dns_response) is tuple:
-					#print("RECEIVED CNAME, GOING TO NEW SERVER")
+				if type(temp_dns_response) is tuple: # If response is a tuple, it's a CNAME and we restart the process with the new name
 					print(f"Discovered alias {str(temp_dns_response[0])[:-1]}, returning to root server")
-					return name_resolver(udp_socket, str(temp_dns_response[0])[:-1], domain_name)
-				else:
-					print("Received Answer:")
+					domain_to_save = domain_name if original_name == "" else original_name
+					return name_resolver(udp_socket, str(temp_dns_response[0])[:-1], domain_to_save)
+				else: # The response is an Answer if this is true, so we return that
 					domain_name = original_name if original_name != "" else domain_name
+					print(f"Received Answer for {domain_name}:")
 					cache_server(domain_name, str(temp_dns_response), domain_name)
 					return temp_dns_response
 
+			# Answer/CNAME not received, so continue with new response
 			if len(temp_dns_response) > 0:
 				dns_response = None
 				dns_response = temp_dns_response[:]
-				current_domain_substr_index += 1
+				if current_domain_substr_index + 1 < len(domain_substrs):
+					current_domain_substr_index += 1
 
+'''
+Split the domain into a list of substrings.
+'''
 def get_domain_substrings(domain_name: str):
 	substring_list = domain_name.rsplit('.')
 	substring_list_rev = substring_list[::-1]
@@ -117,6 +117,9 @@ def get_domain_substrings(domain_name: str):
   
 	return domain_substrings
 
+'''
+Print the cache in an easily-readable format.
+'''
 def print_cache():
 	print("----------\nCache: ")
 	for i in range(len(cache)):
@@ -124,14 +127,23 @@ def print_cache():
   
 	print("----------")
 
+'''
+Remove a cached server based on the specified index.
+'''
 def remove_cache_item(id: int):
 	cache.pop(id - 1)
 	print(f"Removed record {id}")
 
+'''
+Cache the given server by providing the name, IPv4, and what it was used to resolve for (should be the same as the name if is the answer to a query)
+'''
 def cache_server(name: str, ipv4: str, is_ns_for: str):
 	if not is_in_cache(name):
 		cache.append({ name: [ipv4, is_ns_for]})
 
+'''
+Return whether or not the specified server is in the cache.
+'''
 def is_in_cache(domain: str):
 	for server in cache:
 		if domain in server.keys():
@@ -139,6 +151,10 @@ def is_in_cache(domain: str):
   
 	return False
 
+
+'''
+Return the corresponding IPv4 to the given domain.
+'''
 def get_cached_ip_by_domain(domain: str):
 	for i in range(len(cache)):
 		if domain in cache[i].keys():
@@ -146,10 +162,12 @@ def get_cached_ip_by_domain(domain: str):
   
 	return None
 
+'''
+Get the DNS record by providing a socket, the domain, a server the ask, and the DNS record type.
+'''
 def get_dns_record(udp_socket, domain:str, parent_server: str, record_type):
 	q = DNSRecord.question(domain, qtype = record_type)
 	q.header.rd = 0   # Recursion Desired?  NO
-	#print("DNS query", repr(q))
 	udp_socket.sendto(q.pack(), (parent_server, DNS_PORT))
 	pkt, _ = udp_socket.recvfrom(8192)
 	buff = DNSBuffer(pkt)
@@ -170,7 +188,6 @@ def get_dns_record(udp_socket, domain:str, parent_server: str, record_type):
 	"""
 
 	header = DNSHeader.parse(buff)
-	#print("DNS header", repr(header))
 	if q.header.id != header.id:
 		raise QueryFailedError("Unable to find domain\nUnmatched transaction, query header ID != response header ID")
 	if header.rcode != RCODE.NOERROR:
@@ -179,48 +196,37 @@ def get_dns_record(udp_socket, domain:str, parent_server: str, record_type):
 	# Parse the question section #2
 	for k in range(header.q):
 		q = DNSQuestion.parse(buff)
-		#print(f"Question-{k} {repr(q)}")
 	
 	# Parse the answer section #3
 	for k in range(header.a):
 		a = RR.parse(buff)
-		#print(f"Answer-{k} {repr(a)}")
 		if a.rtype == QTYPE.A:
-			#print("IP address")
 			answer = a.rdata
 		elif a.rtype == QTYPE.CNAME and answer == None:
-			#print("CNAME")
 			answer = (a.rdata, a.rtype)
 	  
   # Parse the authority section #4
 	for k in range(header.auth):
 		auth = RR.parse(buff)
-		#print(f"Authority-{k} {repr(auth)}")
 		authoritative_resp.append(auth)
 	  
   # Parse the additional section #5
 	for k in range(header.ar):
 		adr = RR.parse(buff)
-		#print(f"Additional-{k} {repr(adr)} Name: {adr.rname}")
 		additional_resp.append(adr)
 
 		if adr.rtype == 1:
 			cache_server(str(adr.rname)[:-1], str(adr.rdata), domain)
-			#print(f"CACHING {str(adr.rname)[:-1]} FOR DOMAIN {domain}")
 	
 	valid_servers = []
 
 	# If there is an IPv4 answer, then return that, otherwise return list of valid servers to check
 	if answer != None or header.auth == 0:
-		#print("ANSWER AND TYPE")
-		#print(answer)
-		#print(type(answer) == list)
 		return answer
 	else:
 		for server in authoritative_resp:
 			valid_servers.append(str(server.rdata))
 	
-	#print(f"VALID SERVERS TO SEND: {valid_servers}")
 	return valid_servers
 
   
@@ -229,6 +235,7 @@ if __name__ == '__main__':
 	sock = socket(AF_INET, SOCK_DGRAM)
 	sock.settimeout(2)
 
+	# The main program loop
 	while True:
 		domain_name = input("Enter a domain name or .exit > ")
 

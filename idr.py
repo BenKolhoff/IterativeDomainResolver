@@ -257,6 +257,6 @@ if __name__ == '__main__':
 			if output is not None:
 				print(str(output))
 			else:
-				print("Timed out")
+				print("Unable to resolve domain")
   
 	sock.close()
